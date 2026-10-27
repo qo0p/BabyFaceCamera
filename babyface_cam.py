@@ -62,11 +62,11 @@ NEURAL_SLIDERS = [
     ("Stability", "gan", "temporal", 90),
 ]
 
-# In neural mode the network does most of the work; the warp only reshapes the
-# head (shorter chin, rounder face) so the generated baby face fits it.
-NEURAL_WARP = dict(eyes=0.15, nose=0.15, mouth=0.05, chin=0.12, round=0.06,
-                   head=0.10, smooth=0.0, blush=0.15)
-NEURAL_DEFAULTS = dict(blend=1.0, age=0.0, temporal=0.5)
+# Neural mode defaults, hand-tuned in the app. The network does most of the
+# work, blended in lightly; the warp reshapes the head around it.
+NEURAL_WARP = dict(strength=0.93, eyes=0.02, nose=0.27, mouth=0.13, chin=0.04,
+                   round=0.03, head=0.30, smooth=1.0, blush=0.21, brows=-0.95)
+NEURAL_DEFAULTS = dict(blend=0.24, age=1.0, temporal=0.9)
 
 
 class OneEuro:
@@ -195,8 +195,10 @@ def create_gan(mode, gender):
 
 def defaults(args, neural):
     """Slider targets with their default values for the given mode."""
-    strength = 1.0 if args.strength is None else args.strength
-    warp = Settings(strength=strength, **(NEURAL_WARP if neural else {}))
+    values = dict(NEURAL_WARP) if neural else {}
+    if args.strength is not None:
+        values["strength"] = args.strength
+    warp = Settings(**values)
     return {"warp": warp, "gan": SimpleNamespace(**NEURAL_DEFAULTS)}
 
 

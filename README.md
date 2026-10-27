@@ -8,7 +8,7 @@ like any other camera.
 There are two modes:
 
 - **Neural (default with an NVIDIA GPU):** realistic, similar to popular "baby face" camera lenses.
-  A neural network redraws your face as a 0–2 year old. It uses the generator from
+  A neural network redraws your face as a young child (0–2 to 3–6 years, adjustable). It uses the generator from
   [Lifespan Age Transformation Synthesis](https://github.com/royorel/Lifespan_Age_Transformation_Synthesis)
   (Or-El et al., ECCV 2020). A light warp first makes the head rounder and the chin
   shorter, so the baby face fits it. Runs at about 27 fps at 720p on an RTX 4070 Laptop GPU.
@@ -136,7 +136,7 @@ Useful options (`./run.sh --help`):
 - `babyface_cam.py`: capture, landmark tracking (with One Euro smoothing), preview, saved settings, virtual camera output
 - `baby_filter.py`: the warp and skin filter (one displacement field + `cv2.remap`, guided-filter skin smoothing)
 - `baby_gan.py`: the neural stage. It aligns the face to the model's 256×256 crop, greys out the background and
-  clothes (MediaPipe selfie segmenter), runs the age-0–2 generator in fp16 on the GPU, matches the colour and
+  clothes (MediaPipe selfie segmenter), runs the age-transformation generator in fp16 on the GPU, matches the colour and
   feathers the result back into the frame
 - `download_models.sh`: fetches all models
 - `setup_virtualcam.sh`: creates or removes the v4l2loopback device
