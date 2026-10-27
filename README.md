@@ -73,6 +73,18 @@ The keys below work while the video window is focused.
 | `Age 0-2..3-6` | 0 = baby, 100 = toddler |
 | `Stability` | smooths the neural face over time; higher means less flicker but more lag |
 
+### Saved settings
+
+Your slider values, the mode (neural or classic) and the male/female model are saved automatically
+in `~/.config/babyface-camera/settings.json` and restored the next time you start the app. Neural and
+classic mode each remember their own slider values.
+
+- `r` resets the sliders to the defaults (and saves that).
+- `./run.sh --reset-settings` starts from the defaults.
+- To forget everything, delete `~/.config/babyface-camera/`.
+- Options you pass explicitly, like `--strength` or `--gender`, override the saved values for that run.
+  `--mode classic` doesn't change your saved mode.
+
 The buttons above the video only change the preview, not what apps receive. Hover over a button to see its tooltip:
 
 | Button | Action |
@@ -101,6 +113,7 @@ Useful options (`./run.sh --help`):
 --no-preview          run without a window
 --no-virtual          preview only, no virtual camera needed
 --mirror-output       mirror what apps receive
+--reset-settings      ignore saved settings and start from defaults
 ```
 
 ## Troubleshooting
@@ -119,7 +132,7 @@ Useful options (`./run.sh --help`):
 
 ## Files
 
-- `babyface_cam.py`: capture, landmark tracking (with One Euro smoothing), preview, virtual camera output
+- `babyface_cam.py`: capture, landmark tracking (with One Euro smoothing), preview, saved settings, virtual camera output
 - `baby_filter.py`: the warp and skin filter (one displacement field + `cv2.remap`, guided-filter skin smoothing)
 - `baby_gan.py`: the neural stage. It aligns the face to the model's 256×256 crop, greys out the background and
   clothes (MediaPipe selfie segmenter), runs the age-0–2 generator in fp16 on the GPU, matches the colour and

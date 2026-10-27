@@ -7,6 +7,7 @@ browsers etc. can select as "BabyFace Camera".
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -35,6 +36,8 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_MODEL = HERE / "models" / "face_landmarker.task"
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
              "face_landmarker/float16/latest/face_landmarker.task")
+CONFIG_FILE = (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+               / "babyface-camera" / "settings.json")
 WINDOW = "BabyFace Camera"
 CONTROLS = "BabyFace Controls"
 
@@ -99,19 +102,22 @@ def parse_args():
     p.add_argument("--height", type=int, default=720)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--faces", type=int, default=1, help="max faces to filter")
-    p.add_argument("--strength", type=float, default=1.0,
-                   help="global warp strength, 0..2 (default 1.0)")
+    p.add_argument("--strength", type=float,
+                   help="global warp strength, 0..2 (default: last used, else 1.0)")
     p.add_argument("--mode", choices=["auto", "neural", "classic"], default="auto",
                    help="neural: AI baby face on the GPU (realistic); classic: warp and "
                         "smoothing only (any CPU); auto: neural when a CUDA GPU is available")
-    p.add_argument("--gender", choices=["male", "female"], default="male",
-                   help="which neural model to use (key g switches it live)")
+    p.add_argument("--gender", choices=["male", "female"],
+                   help="which neural model to use (key g switches it live; "
+                        "default: last used, else male)")
     p.add_argument("--no-preview", action="store_true", help="run without a window")
     p.add_argument("--no-virtual", action="store_true",
                    help="preview only, don't open the virtual camera")
     p.add_argument("--mirror-output", action="store_true",
                    help="mirror the stream sent to apps (most apps mirror self-view already)")
     p.add_argument("--model", default=str(DEFAULT_MODEL))
+    p.add_argument("--reset-settings", action="store_true",
+                   help=f"start from defaults instead of the settings saved in {CONFIG_FILE}")
     return p.parse_args()
 
 
@@ -186,8 +192,79 @@ def create_gan(mode, gender):
 
 def defaults(args, neural):
     """Slider targets with their default values for the given mode."""
-    warp = Settings(strength=args.strength, **(NEURAL_WARP if neural else {}))
+    strength = 1.0 if args.strength is None else args.strength
+    warp = Settings(strength=strength, **(NEURAL_WARP if neural else {}))
     return {"warp": warp, "gan": SimpleNamespace(**NEURAL_DEFAULTS)}
+
+
+class Prefs:
+    """Slider values, mode and gender, remembered between runs."""
+
+    def __init__(self, path, fresh=False):
+        self.path = path
+        self.data = {}
+        if not fresh:
+            try:
+                self.data = json.loads(path.read_text())
+                if not isinstance(self.data, dict):
+                    raise ValueError("not a JSON object")
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError) as e:
+                print(f"warning: ignoring saved settings {path}: {e}")
+                self.data = {}
+        self._written = self._dump()
+
+    def _dump(self):
+        return json.dumps(self.data, indent=2, sort_keys=True)
+
+    def save(self):
+        text = self._dump()
+        if text == self._written:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(text + "\n")
+            os.replace(tmp, self.path)  # atomic: never leaves a half-written file
+        except OSError as e:
+            print(f"warning: cannot save settings to {self.path}: {e}")
+        self._written = text
+
+
+def slider_values(obj, target):
+    return {field: round(getattr(obj, field), 2)
+            for _, t, field, _ in WARP_SLIDERS + NEURAL_SLIDERS if t == target}
+
+
+def load_values(obj, target, values):
+    """Copy known, in-range fields from a saved dict onto a slider target."""
+    if not isinstance(values, dict):
+        return
+    for _, t, field, maxv in WARP_SLIDERS + NEURAL_SLIDERS:
+        v = values.get(field)
+        if t == target and isinstance(v, (int, float)):
+            setattr(obj, field, min(max(float(v), 0.0), maxv / 100))
+
+
+def load_mode(targets, prefs, args, neural):
+    """Set the warp sliders for a mode: defaults, then what was saved for it."""
+    warp = targets["warp"]
+    load_values(warp, "warp", slider_values(defaults(args, neural)["warp"], "warp"))
+    load_values(warp, "warp", prefs.data.get("warp", {}).get("neural" if neural else "classic"))
+    if args.strength is not None:
+        warp.strength = args.strength
+
+
+def remember(prefs, targets, gan, use_gan):
+    d = prefs.data
+    if not isinstance(d.get("warp"), dict):
+        d["warp"] = {}
+    d["warp"]["neural" if use_gan else "classic"] = slider_values(targets["warp"], "warp")
+    if gan:  # only record mode and model when the neural option exists
+        d["mode"] = "neural" if use_gan else "classic"
+        d["gender"] = gan.gender
+        d["gan"] = slider_values(gan, "gan")
 
 
 def setup_window(sliders, targets, w, h):
@@ -249,11 +326,20 @@ def main():
         sys.exit("error: input and output are the same device")
 
     cv2.setNumThreads(4)  # more threads only add spin overhead for these small ROIs
-    gan = create_gan(args.mode, args.gender)
-    use_gan = gan is not None
-    settings = defaults(args, use_gan)["warp"]
+    prefs = Prefs(CONFIG_FILE, fresh=args.reset_settings)
+    saved_gender = prefs.data.get("gender")
+    gender = args.gender or (saved_gender if saved_gender in ("male", "female") else "male")
+    gan = create_gan(args.mode, gender)
+    use_gan = gan is not None and (args.mode == "neural" or prefs.data.get("mode") != "classic")
+    settings = Settings()
     flt = BabyFaceFilter(settings)
     targets = {"warp": settings, "gan": gan}
+    load_mode(targets, prefs, args, use_gan)
+    if gan:
+        load_values(gan, "gan", NEURAL_DEFAULTS)
+        load_values(gan, "gan", prefs.data.get("gan"))
+    if prefs.data and not args.reset_settings:
+        print(f"Using saved settings from {CONFIG_FILE}")
     sliders = WARP_SLIDERS + (NEURAL_SLIDERS if gan else [])
     mp, landmarker = create_landmarker(args.model, args.faces)
     cap = open_capture(args.input, args.width, args.height, args.fps)
@@ -275,6 +361,7 @@ def main():
     t0 = time.monotonic()
     last_ts = -1
     fps, fps_t, fps_n = 0.0, t0, 0
+    saved_t = t0
 
     try:
         while True:
@@ -315,6 +402,10 @@ def main():
                 fps, fps_t, fps_n = fps_n / (now - fps_t), now, 0
                 if not preview:
                     print(f"\r{fps:4.1f} fps, faces: {len(faces)}  ", end="", flush=True)
+            if now - saved_t >= 1.0:  # writes only when something changed
+                remember(prefs, targets, gan, use_gan)
+                prefs.save()
+                saved_t = now
 
             if preview:
                 view = cv2.flip(frame, 1)  # mirror like a real mirror
@@ -332,10 +423,16 @@ def main():
                 elif key == ord("l"):
                     show_lm = not show_lm
                 elif key == ord("r"):
-                    set_sliders(sliders, defaults(args, use_gan))
+                    d = defaults(args, use_gan)
+                    load_values(settings, "warp", slider_values(d["warp"], "warp"))
+                    if gan:
+                        load_values(gan, "gan", NEURAL_DEFAULTS)
+                    set_sliders(sliders, targets)
                 elif key == ord("n") and gan:
+                    remember(prefs, targets, gan, use_gan)  # keep this mode's sliders
                     use_gan = not use_gan
-                    set_sliders(sliders, defaults(args, use_gan))
+                    load_mode(targets, prefs, args, use_gan)
+                    set_sliders(sliders, targets)
                 elif key == ord("g") and gan:
                     gan.gender = "female" if gan.gender == "male" else "male"
                     gan.reset()
@@ -345,6 +442,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        remember(prefs, targets, gan, use_gan)
+        prefs.save()
         cap.release()
         if cam is not None:
             cam.close()
