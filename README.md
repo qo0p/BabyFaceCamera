@@ -56,7 +56,9 @@ A preview window opens, and the filtered video goes to the virtual camera. Then 
 > The virtual device only shows up as a camera while something is streaming to it
 > (`exclusive_caps=1`, which Chrome-based apps and Zoom need).
 
-Preview window controls:
+Two windows open: **BabyFace Camera** shows the video, and **BabyFace Controls** has the sliders.
+The keys below work while the video window is focused.
+
 
 | Key / slider | Action |
 |---|---|
@@ -70,6 +72,18 @@ Preview window controls:
 | `Baby AI %` | how much of the neural face to show |
 | `Age 0-2..3-6` | 0 = baby, 100 = toddler |
 | `Stability` | smooths the neural face over time; higher means less flicker but more lag |
+
+The buttons above the video only change the preview, not what apps receive. Hover over a button to see its tooltip:
+
+| Button | Action |
+|---|---|
+| ← → ↑ ↓ | pan a zoomed-in preview |
+| first picture icon | zoom back to 100% |
+| second picture icon | zoom in to pixel level |
+| magnifiers | zoom in / out (also mouse wheel) |
+| floppy disk | save the current frame as an image |
+| clipboard | copy the current frame |
+| last icon (greyed out) | properties panel, not used |
 
 The preview is mirrored like a real mirror. The stream to apps is not mirrored, because Zoom and
 Telegram mirror your self-view themselves.

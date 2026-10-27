@@ -15,13 +15,19 @@ from types import SimpleNamespace
 
 # Quieter Qt (OpenCV's preview window) and MediaPipe logging; must precede imports
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-if Path("/usr/share/fonts/truetype/dejavu").is_dir():
-    os.environ.setdefault("QT_QPA_FONTDIR", "/usr/share/fonts/truetype/dejavu")
 os.environ.setdefault("GLOG_minloglevel", "2")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import cv2
 import numpy as np
+
+# The pip OpenCV build points Qt at an empty font folder on import, which leaves
+# slider labels and tooltips blank. Point it at system fonts instead; Qt reads
+# this when the first window opens, so it must come after `import cv2`.
+for _fonts in ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype"):
+    if Path(_fonts).is_dir():
+        os.environ["QT_QPA_FONTDIR"] = _fonts
+        break
 
 from baby_filter import BabyFaceFilter, Settings
 
@@ -30,6 +36,7 @@ DEFAULT_MODEL = HERE / "models" / "face_landmarker.task"
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
              "face_landmarker/float16/latest/face_landmarker.task")
 WINDOW = "BabyFace Camera"
+CONTROLS = "BabyFace Controls"
 
 # Preview sliders: (label, target, field, max slider value); slider value = field * 100
 WARP_SLIDERS = [
@@ -183,23 +190,42 @@ def defaults(args, neural):
     return {"warp": warp, "gan": SimpleNamespace(**NEURAL_DEFAULTS)}
 
 
-def setup_window(sliders, targets):
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+def setup_window(sliders, targets, w, h):
+    # Video and sliders in separate windows: 12 sliders under the video would
+    # squeeze it to nothing at normal window sizes
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_EXPANDED)
+    pw = min(w, 960)
+    cv2.resizeWindow(WINDOW, pw, pw * h // w)
+    cv2.moveWindow(WINDOW, 40, 40)
+    # Qt always reserves room for an image: use it for a short header, and let
+    # the window size itself to the header plus the sliders
+    cv2.namedWindow(CONTROLS, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
     for label, target, field, maxv in sliders:
-        cv2.createTrackbar(label, WINDOW, int(round(getattr(targets[target], field) * 100)),
+        cv2.createTrackbar(label, CONTROLS, int(round(getattr(targets[target], field) * 100)),
                            maxv, lambda _v: None)
+    header = np.full((56, 520, 3), 40, np.uint8)
+    cv2.putText(header, "Effect settings: changes apply live", (12, 23),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(header, "Press r in the video window to reset", (12, 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (190, 190, 190), 1, cv2.LINE_AA)
+    cv2.imshow(CONTROLS, header)
+    cv2.moveWindow(CONTROLS, 40 + pw + 20, 40)
 
 
 def read_sliders(sliders, targets):
+    if cv2.getWindowProperty(CONTROLS, cv2.WND_PROP_VISIBLE) < 1:
+        return  # controls window closed: keep the last values
     for label, target, field, _ in sliders:
-        v = cv2.getTrackbarPos(label, WINDOW)
+        v = cv2.getTrackbarPos(label, CONTROLS)
         if v >= 0:
             setattr(targets[target], field, v / 100.0)
 
 
 def set_sliders(sliders, values):
+    if cv2.getWindowProperty(CONTROLS, cv2.WND_PROP_VISIBLE) < 1:
+        return
     for label, target, field, _ in sliders:
-        cv2.setTrackbarPos(label, WINDOW, int(round(getattr(values[target], field) * 100)))
+        cv2.setTrackbarPos(label, CONTROLS, int(round(getattr(values[target], field) * 100)))
 
 
 def draw_hud(img, fps, enabled, n_faces, virtual, gan, use_gan):
@@ -208,10 +234,13 @@ def draw_hud(img, fps, enabled, n_faces, virtual, gan, use_gan):
              f"  mode: {mode}  virtual cam: {'on' if virtual else 'off'}",
              "space: filter on/off  " + ("n: neural/classic  g: male/female  " if gan else "")
              + "l: landmarks  r: reset sliders  q: quit"]
+    # Translucent bar instead of a thick black outline: OpenCV 5 treats putText
+    # thickness as font weight, so an outline pass comes out wider than the text
+    bar = img[:12 + 22 * len(lines)]
+    bar[:] = (bar * 0.45).astype(np.uint8)
     for i, t in enumerate(lines):
-        y = 24 + i * 22
-        cv2.putText(img, t, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(img, t, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, t, (10, 24 + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (255, 255, 255), 1, cv2.LINE_AA)
 
 
 def main():
@@ -238,7 +267,7 @@ def main():
     cam = None if args.no_virtual else open_virtual_cam(args.output, w, h, args.fps)
     preview = not args.no_preview
     if preview:
-        setup_window(sliders, targets)
+        setup_window(sliders, targets, w, h)
 
     smoothers = []
     enabled, show_lm = True, False
