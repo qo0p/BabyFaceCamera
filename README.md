@@ -69,6 +69,7 @@ The keys below work while the video window is focused.
 | `r` | reset sliders to defaults |
 | `q` / `Esc` | quit |
 | sliders | strength of each part of the effect; changes are live |
+| `Brows -/+` | eyebrow size: below 0 smaller and thinner, above 0 bigger and thicker. In neural mode, values above 0 also bring back your real eyebrow hair, because the network draws faint baby brows |
 | `Baby AI %` | how much of the neural face to show |
 | `Age 0-2..3-6` | 0 = baby, 100 = toddler |
 | `Stability` | smooths the neural face over time; higher means less flicker but more lag |

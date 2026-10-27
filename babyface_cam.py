@@ -52,7 +52,10 @@ WARP_SLIDERS = [
     ("Head", "warp", "head", 30),
     ("Smooth", "warp", "smooth", 100),
     ("Blush", "warp", "blush", 100),
+    ("Brows -/+", "warp", "brows", 100),
 ]
+# Sliders that go below zero (default minimum is 0)
+SLIDER_MIN = {"brows": -100}
 NEURAL_SLIDERS = [
     ("Baby AI %", "gan", "blend", 100),
     ("Age 0-2..3-6", "gan", "age", 100),
@@ -244,7 +247,7 @@ def load_values(obj, target, values):
     for _, t, field, maxv in WARP_SLIDERS + NEURAL_SLIDERS:
         v = values.get(field)
         if t == target and isinstance(v, (int, float)):
-            setattr(obj, field, min(max(float(v), 0.0), maxv / 100))
+            setattr(obj, field, min(max(float(v), SLIDER_MIN.get(field, 0) / 100), maxv / 100))
 
 
 def load_mode(targets, prefs, args, neural):
@@ -278,8 +281,10 @@ def setup_window(sliders, targets, w, h):
     # the window size itself to the header plus the sliders
     cv2.namedWindow(CONTROLS, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
     for label, target, field, maxv in sliders:
-        cv2.createTrackbar(label, CONTROLS, int(round(getattr(targets[target], field) * 100)),
-                           maxv, lambda _v: None)
+        cv2.createTrackbar(label, CONTROLS, 0, maxv, lambda _v: None)
+        if field in SLIDER_MIN:
+            cv2.setTrackbarMin(label, CONTROLS, SLIDER_MIN[field])
+        cv2.setTrackbarPos(label, CONTROLS, int(round(getattr(targets[target], field) * 100)))
     header = np.full((56, 520, 3), 40, np.uint8)
     cv2.putText(header, "Effect settings: changes apply live", (12, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
@@ -294,7 +299,7 @@ def read_sliders(sliders, targets):
         return  # controls window closed: keep the last values
     for label, target, field, _ in sliders:
         v = cv2.getTrackbarPos(label, CONTROLS)
-        if v >= 0:
+        if v >= SLIDER_MIN.get(field, 0):
             setattr(targets[target], field, v / 100.0)
 
 
@@ -392,7 +397,11 @@ def main():
             if faces and amount > 0:
                 warped = flt.apply(frame, faces, amount)
                 if use_gan:
+                    before = frame.copy() if settings.brows > 0 else None
                     gan.apply(frame, warped, amount)
+                    if before is not None:
+                        flt.restore_brows(frame, before, warped, amount)
+                flt.apply_brows(frame, warped, amount)  # after the network, which redraws brows
 
             if cam is not None:
                 cam.send(cv2.flip(frame, 1) if args.mirror_output else frame)

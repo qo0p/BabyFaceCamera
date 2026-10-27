@@ -44,6 +44,7 @@ class Settings:
     head: float = 0.12      # bigger forehead / cranium
     smooth: float = 0.65    # skin smoothing
     blush: float = 0.30     # pink cheeks
+    brows: float = 0.0      # eyebrow size: < 0 smaller, > 0 bigger (-1..1)
 
 
 def _norm(v):
@@ -73,6 +74,60 @@ class BabyFaceFilter:
         if amount <= 0:
             return list(faces)
         return [self._apply_one(frame, lm.astype(np.float32), amount) for lm in faces]
+
+    def apply_brows(self, frame, faces, amount=1.0):
+        """Resize the eyebrows in place. A separate pass, so it can run after
+        the neural stage, which redraws the brows."""
+        k = self.settings.brows * amount
+        if abs(k) < 1e-3:
+            return list(faces)
+        out = []
+        for lm in faces:
+            lm = lm.astype(np.float32)
+            fw = float(np.linalg.norm(lm[FACE_LEFT_EDGE] - lm[FACE_RIGHT_EDGE]))
+            out.append(self._remap(frame, lm, self._brow_warps(lm, k)) if fw >= 20 else lm)
+        return out
+
+    def restore_brows(self, frame, original, faces, amount=1.0):
+        """Bring the real eyebrow hair back over a redrawn (neural) face.
+
+        Only for positive brow sizes: the network draws faint baby brows that a
+        size change alone can't make visible. "Darken only" blending brings back
+        the hair without the adult skin around it.
+        """
+        a = min(1.0, self.settings.brows) * amount
+        if a <= 0.01:
+            return
+        h, w = frame.shape[:2]
+        for lm in faces:
+            pts = np.concatenate([lm[RIGHT_BROW], lm[LEFT_BROW]])
+            fw = float(np.linalg.norm(lm[FACE_LEFT_EDGE] - lm[FACE_RIGHT_EDGE]))
+            pad = int(0.08 * fw) + 2
+            x0, y0 = np.maximum(pts.min(0).astype(int) - pad, 0)
+            x1, y1 = np.minimum(pts.max(0).astype(int) + pad, (w, h))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            mask = np.zeros((y1 - y0, x1 - x0), np.float32)
+            for brow in (RIGHT_BROW, LEFT_BROW):
+                hull = cv2.convexHull((lm[brow] - (x0, y0)).astype(np.int32))
+                cv2.fillConvexPoly(mask, hull, 1.0)
+            mask = cv2.GaussianBlur(cv2.dilate(mask, None, iterations=max(1, int(0.015 * fw))),
+                                    (0, 0), 0.02 * fw + 0.5)[..., None] * a
+            cur = frame[y0:y1, x0:x1].astype(np.float32)
+            darker = np.minimum(cur, original[y0:y1, x0:x1].astype(np.float32))
+            frame[y0:y1, x0:x1] = (cur * (1 - mask) + darker * mask).astype(np.uint8)
+
+    @staticmethod
+    def _brow_warps(lm, k):
+        """Chain of small bulges along each brow's centre line."""
+        warps = []
+        for brow in (RIGHT_BROW, LEFT_BROW):
+            # contour: 5 lower points outer->inner, then 5 upper points outer->inner
+            mid = (lm[brow[:5]] + lm[brow[5:]]) / 2
+            length = np.linalg.norm(mid[0] - mid[-1])
+            for c in mid:
+                warps.append(("bulge", c, 0.35 * length, float(np.clip(0.4 * k, -0.6, 0.6))))
+        return warps
 
     def _warps(self, lm, fw, k):
         """Local warps as (kind, centre, radius, param) for one face."""
@@ -157,8 +212,18 @@ class BabyFaceFilter:
         if s.smooth > 0 or s.blush > 0:
             self._skin(roi, lm - (x0, y0), fw, amount)
 
-        warps = self._warps(lm, fw, s.strength * amount)
+        return self._remap(frame, lm, self._warps(lm, fw, s.strength * amount))
+
+    def _remap(self, frame, lm, warps):
+        """Apply warps around one face in place; returns the moved landmarks."""
         if not warps:
+            return lm
+        h, w = frame.shape[:2]
+        x0 = int(max(0, min(c[0] - r for _, c, r, _ in warps)))
+        y0 = int(max(0, min(c[1] - r for _, c, r, _ in warps)))
+        x1 = int(min(w, max(c[0] + r + 1 for _, c, r, _ in warps)))
+        y1 = int(min(h, max(c[1] + r + 1 for _, c, r, _ in warps)))
+        if x1 - x0 < 2 or y1 - y0 < 2:
             return lm
         gx, gy = self._grids(h, w)
         px, py = gx[y0:y1, x0:x1], gy[y0:y1, x0:x1]
